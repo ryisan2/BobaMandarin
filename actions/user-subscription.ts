@@ -1,10 +1,10 @@
-"use server";
 
-import { auth, currentUser } from "@clerk/nextjs/server";
+"use server";
 
 import { stripe } from "@/lib/stripe";
 import { absoluteUrl } from "@/lib/utils";
 import { getUserSubscription } from "@/db/queries";
+import { auth, currentUser } from "@clerk/nextjs/server";
 
 const returnUrl = absoluteUrl("/shop");
 
@@ -19,12 +19,12 @@ export const createStripeUrl = async () => {
   const userSubscription = await getUserSubscription();
 
   if (userSubscription && userSubscription.stripeCustomerId) {
-    const stripeSesson = await stripe.billingPortal.sessions.create({
+    const stripeSession = await stripe.billingPortal.sessions.create({
       customer: userSubscription.stripeCustomerId,
       return_url: returnUrl,
     });
 
-    return { data: stripeSesson.url };
+    return { data: stripeSession.url };
   }
 
   const stripeSession = await stripe.checkout.sessions.create({
@@ -37,8 +37,8 @@ export const createStripeUrl = async () => {
         price_data: {
           currency: "USD",
           product_data: {
-            name: "Boba Mandarin Subscription",
-            description: "Monthly Boba Mandarin Subscription",
+            name: "Boba Mandarin Pro",
+            description: "Unlimited Hearts",
           },
           unit_amount: 20000,
           recurring: {
@@ -47,11 +47,12 @@ export const createStripeUrl = async () => {
         },
       },
     ],
-    metadata:{
-        userId,  
+    metadata: {
+        userId,
     },
     success_url: returnUrl,
-    cancel_url:  returnUrl,
+    cancel_url: returnUrl,
   });
-  return{data:stripeSession.url};
+
+  return { data: stripeSession.url }
 };

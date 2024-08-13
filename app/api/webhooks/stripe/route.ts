@@ -1,66 +1,67 @@
-import Stripe from "stripe";
-import {headers} from "next/headers"
-
-import {stripe} from "@/lib/stripe";
-import { NextResponse } from "next/server";
-import { userSubscription } from "@/db/schema";
-
 import db from "@/db/drizzle";
+import { userSubscription } from "@/db/schema";
+import { stripe } from "@/lib/stripe";
 import { eq } from "drizzle-orm";
+import { headers } from "next/headers";
+import { NextRequest, NextResponse } from "next/server";
+import Stripe from "stripe";
 
-export async function POST(req: Request) {
-    const body=await req.text();
-    const signature =headers().get("Stripe-Signature") as string;
+export async function POST(req: NextRequest) {
+  const body = await req.text();
+  const signature = headers().get("Stripe-Signature") as string;
 
+  let event: Stripe.Event;
 
-    let event: Stripe.Event;
+  try {
+    event = stripe.webhooks.constructEvent(
+      body,
+      signature,
+      process.env.STRIPE_WEBHOOK_SECRET!,
+    );
+  } catch(error: any) {
+    return new NextResponse(`Webhook error: ${error.message}`, {
+      status: 400,
+    });
+  }
 
-    try{
-        event = stripe.webhooks.constructEvent(body, signature, process.env.STRIPE_WEBHOOK_SECRET!);
-    }catch (error: any) {
-        return new NextResponse(`Webhook Error: ${error.message}`, {
-            status: 400,
-        });
-    }
-    
-    const session =event.data.object as Stripe.Checkout.Session;
+  const session = event.data.object as Stripe.Checkout.Session;
 
-    if (event.type === "checkout.session.completed") {
-        console.log(`Payment for session ${session.id} was successful`);
-        const subscription = await stripe.subscriptions.retrieve(session.subscription as string
-            
-        );
+  //first time subscription payment
+  if (event.type === "checkout.session.completed") {
+    const subscription = await stripe.subscriptions.retrieve(
+      session.subscription as string
+    );
 
-        if(!session?.metadata?.userId){
-            return new NextResponse("User ID is required", {status: 400});
-        }
-        
-        await db.insert(userSubscription).values({userId: session.metadata.userId,
-            stripeSubscriptionId: subscription.id,
-            stripeCustomerId: subscription.customer as string,
-            stripePriceId: subscription.items.data[0].price.id,
-            stripeCurrentPeriodEnd: new Date(subscription.current_period_end * 1000,
-            ),
-        });
+    if (!session?.metadata?.userId) {
+      return new NextResponse("User ID is required", { status: 400 });
     }
 
-    if (event.type === "invoice.payment_succeeded"){
+    await db.insert(userSubscription).values({
+      userId: session.metadata.userId,
+      stripeSubscriptionId: subscription.id,
+      stripeCustomerId: subscription.customer as string,
+      stripePriceId: subscription.items.data[0].price.id,
+      stripeCurrentPeriodEnd: new Date(
+        subscription.current_period_end * 1000 //timestamps are correctly represented in the database (turning it into miliseconds)
+      ),
+    });
+  }
 
-        const subscription = await stripe.subscriptions.retrieve(
-            session.subscription as string
-        );
+  //if user is renewing subscriptiion
+  if (event.type === "invoice.payment_succeeded") {
+    const subscription = await stripe.subscriptions.retrieve(
+      session.subscription as string
+    );
 
-        await db.update(userSubscription).set({
-
-            stripePriceId: subscription.items.data[0].price.id,
-            stripeCurrentPeriodEnd: new Date(subscription.current_period_end * 1000,
-
-            ),
-        }).where(eq (userSubscription.stripeSubscriptionId, subscription.id));
-    }
-
-    return new NextResponse(null,{status: 200});
-        
-
-
-};
+    await db
+      .update(userSubscription)
+      .set({
+        stripePriceId: subscription.items.data[0].price.id,
+        stripeCurrentPeriodEnd: new Date(
+          subscription.current_period_end * 1000
+        ),
+      })
+      .where(eq(userSubscription.stripeSubscriptionId, subscription.id));
+  }
+  return new NextResponse(null, { status: 200 });
+}
